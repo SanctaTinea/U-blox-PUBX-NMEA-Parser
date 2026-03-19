@@ -17,7 +17,7 @@ Designed for embedded systems (STM32, bare-metal, RTOS) with no dynamic memory a
 
 ---
 
-## Available Data
+## 📡 Available Data
 
 - Latitude (NMEA + decimal degrees)
 - Longitude (NMEA + decimal degrees)
@@ -42,7 +42,7 @@ Designed for embedded systems (STM32, bare-metal, RTOS) with no dynamic memory a
 
 ## 🚀 Usage
 
-### Parse a byte stream and read data as `ubx_gps_data_t`
+### Parse a byte stream and read data as `ubx_gps_data_t`:
 
 ```c
 #include "UBX_NEMEA_parser.h"
@@ -69,7 +69,7 @@ int main(void)
 }
 ```
 
-### Or use getters
+### Or use getters:
 
 ```c
 #include "UBX_NEMEA_parser.h"
