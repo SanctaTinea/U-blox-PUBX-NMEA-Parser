@@ -1,7 +1,6 @@
-#include "Kraken_GPS_Parser_UBX.h"
+#include "UBX_NEMEA_parser.h"
 
-namespace ubx_nem {
-// Временное хранение данных и состояний автомата для парсера
+/* Internal parser state and private data */
 uint8_t gpsTitleBuf[5];
 int8_t parserState = -1;
 int8_t gpsElemType = 0;
@@ -41,14 +40,14 @@ uint8_t gpsStlCount_buf = 0;
 uint8_t gpsXurSum = 0;
 uint8_t gpsCtlSumBuf = 0;
 
-// Полученные значения
+/* Internal parsed data */
 float gpsH = 0;
 double gpsLat = 0;
 double gpsLon = 0;
 float gpsTime = 0;
 uint8_t gpsVector = 0;
 uint8_t gpsStlCount = 0;
-bool gpsReady = false;
+uint8_t gpsReady = 0;
 
 uint8_t gpsNavStat = 0;
 float hAcc = 0;
@@ -60,11 +59,18 @@ float HDOT = 0;
 float VDOT = 0;
 float TDOT = 0;
 
-void parseNMEA(unsigned char s) { parseNMEA(&s, 1); }
+// Combines integer and fractional parts into a single floating-point value.
+// integer, frac = integer.frac (double)
+double _ubx_combineIntegerAndFraction(uint32_t integer, uint32_t frac) {
+	double q = frac;
+	while (q >= 1) { q /= 10; }
+	return integer + q;
+}
 
-void parseNMEA(uint8_t *gpsBuffer, uint16_t size) {
+void ubx_parseNMEA_char(unsigned char s) { ubx_parseNMEA(&s, 1); }
+void ubx_parseNMEA(uint8_t *gpsBuffer, uint16_t size) {
 	for (uint16_t i = 0; i < size; ++i) {
-		if (gpsBuffer[i] == '$') { // Начало нового пакета
+		if (gpsBuffer[i] == '$') { // Beginning of new package
 			parserState = 0;
 			gpsElemType = 0;
 			gpsLat_m = 0; gpsLat_l = 0;
@@ -100,15 +106,15 @@ void parseNMEA(uint8_t *gpsBuffer, uint16_t size) {
 
 		if (parserState == -1) { continue; }
 
-		// Конец пакета
+		// End of package
 		if (gpsBuffer[i] == '\r') {
 			parserState = -1;
-			if (gpsCtlSumBuf == gpsXurSum) { // Если контрольная сумма совпала
-				// Обновление данных
-				gpsLat = addToDuoble(gpsLat_m, gpsLat_l);
-				gpsLon = addToDuoble(gpsLon_m, gpsLon_l);
-				gpsH = addToDuoble(gpsH_m, gpsH_l);
-				gpsTime = addToDuoble(gpsTime_m, gpsTime_l);
+			if (gpsCtlSumBuf == gpsXurSum) { // If checksum right
+				// Updating data
+				gpsLat = _ubx_combineIntegerAndFraction(gpsLat_m, gpsLat_l);
+				gpsLon = _ubx_combineIntegerAndFraction(gpsLon_m, gpsLon_l);
+				gpsH = _ubx_combineIntegerAndFraction(gpsH_m, gpsH_l);
+				gpsTime = _ubx_combineIntegerAndFraction(gpsTime_m, gpsTime_l);
 				gpsVector = gpsVector_buf;
 				gpsStlCount = gpsStlCount_buf;
 				gpsNavStat = 0;
@@ -120,37 +126,37 @@ void parseNMEA(uint8_t *gpsBuffer, uint16_t size) {
 				if (gpsNavStat_buf[0] == 'D' && gpsNavStat_buf[1] == '3') { gpsNavStat = 5; }
 				if (gpsNavStat_buf[0] == 'R' && gpsNavStat_buf[1] == 'K') { gpsNavStat = 6; }
 				if (gpsNavStat_buf[0] == 'T' && gpsNavStat_buf[1] == 'T') { gpsNavStat = 7; }
-				hAcc = addToDuoble(hAcc_m, hAcc_l);
-				vAcc = addToDuoble(vAcc_m, vAcc_l);
-				speed = addToDuoble(speed_m, speed_l)*speed_p;
-				speedV = addToDuoble(speedV_m, speedV_l)*speedV_p;
-				COG = addToDuoble(COG_m, COG_l);
-				HDOT = addToDuoble(HDOT_m, HDOT_l);
-				VDOT = addToDuoble(VDOT_m, VDOT_l);
-				TDOT = addToDuoble(TDOT_m, TDOT_l);
+				hAcc = _ubx_combineIntegerAndFraction(hAcc_m, hAcc_l);
+				vAcc = _ubx_combineIntegerAndFraction(vAcc_m, vAcc_l);
+				speed = _ubx_combineIntegerAndFraction(speed_m, speed_l)*speed_p;
+				speedV = _ubx_combineIntegerAndFraction(speedV_m, speedV_l)*speedV_p;
+				COG = _ubx_combineIntegerAndFraction(COG_m, COG_l);
+				HDOT = _ubx_combineIntegerAndFraction(HDOT_m, HDOT_l);
+				VDOT = _ubx_combineIntegerAndFraction(VDOT_m, VDOT_l);
+				TDOT = _ubx_combineIntegerAndFraction(TDOT_m, TDOT_l);
 
-				// Если gpsReady == true, то GPS 'поймал' стуники
-				if (gpsLat != 0.0 && gpsLon != 0.0) { gpsReady = true; }
+				// If gpsReady == true, then GPS catch the satellites
+				if (gpsLat != 0.0 && gpsLon != 0.0) { gpsReady = 1; }
 			}
 			continue;
 		}
 
-		if (parserState == -2) { // Если сейчас передаётся контрольная сумма
+		if (parserState == -2) { // If checksum transmitting now
 			if (gpsBuffer[i] >= 'A') {
-				// Вычитаем 7 из-за семи символов между цифрами и буквами в ASCII
+				// Subtract 7 because the ASCII values of letters and digits differ by 7
 				gpsCtlSumBuf = gpsCtlSumBuf*16 + gpsBuffer[i]-'0'-7;
 			}
 			else { gpsCtlSumBuf = gpsCtlSumBuf*16 + gpsBuffer[i]-'0'; }
 			continue;
 		}
 
-		// Начало контрольной суммы с GPS
+		// Beginning of checksum
 		if (gpsBuffer[i] == '*') { parserState = -2; continue; }
 
-		// Вычисление контрольной суммы
+		// Calculating the checksum
 		gpsXurSum ^= gpsBuffer[i];
 
-		if (parserState == 0) { // Ожидание нужных заголовков
+		if (parserState == 0) { // Waiting for new headers
 			if (gpsBuffer[i] == ',') {
 				if (gpsTitleBuf[1] == 'P' && gpsTitleBuf[2] == 'U' && gpsTitleBuf[3] == 'B' && gpsTitleBuf[4] == 'X') {
 					parserState = 1;
@@ -159,7 +165,7 @@ void parseNMEA(uint8_t *gpsBuffer, uint16_t size) {
 				parserState = -1;
 				continue;
 			}
-			// Обновление послдених пяти символов
+			// Update last five symbols
 			gpsTitleBuf[0] = gpsTitleBuf[1];
 			gpsTitleBuf[1] = gpsTitleBuf[2];
 			gpsTitleBuf[2] = gpsTitleBuf[3];
@@ -168,12 +174,12 @@ void parseNMEA(uint8_t *gpsBuffer, uint16_t size) {
 			continue;
 		}
 
-		if (parserState == 1) { // Парсинг нужного сообщение
+		if (parserState == 1) { // parse the target message
 			if (gpsBuffer[i] == ',' || gpsBuffer[i] == '.') {
 
                 if (gpsElemType == 0 && gpsMsgID != 0) { parserState = -1; continue; }
 
-				// Если пришла точка или запятая, но переходим к следующему значению
+                // If it's a comma or a dot, move to the next value
 				if (gpsBuffer[i] == ',') {
 					if (gpsElemType == 1 || gpsElemType == 3 || gpsElemType == 6 ||
 					gpsElemType == 9 || gpsElemType == 12 || gpsElemType == 14 ||
@@ -184,7 +190,7 @@ void parseNMEA(uint8_t *gpsBuffer, uint16_t size) {
 				gpsElemType++;
 				continue;
 			}
-			// (gpsElemType) - номер текущего значения
+			// (gpsElemType) - current value number
 			if (gpsElemType == 0) { gpsMsgID = gpsMsgID*10 + gpsBuffer[i]-'0'; continue; }
 			if (gpsElemType == 1) { gpsTime_m = gpsTime_m*10 + gpsBuffer[i]-'0'; continue; }
 			if (gpsElemType == 2) { gpsTime_l = gpsTime_l*10 + gpsBuffer[i]-'0'; continue; }
@@ -236,13 +242,40 @@ void parseNMEA(uint8_t *gpsBuffer, uint16_t size) {
 	}
 }
 
-double addToDuoble(uint32_t m, uint32_t l) {
-	double q = l;
-	while (q >= 1) { q /= 10; }
-	return m + q;
-}
+ubx_gps_data_t ubx_getAll() {
+	ubx_gps_data_t data = {0};
 
-float getLat() {
+	data.latitude_nmea = ubx_getLat_nmea();
+	data.latitude_deg = ubx_getLat_deg();
+	data.longitude_nmea = ubx_getLon_nmea();
+	data.longitude_deg = ubx_getLon_deg();
+
+	data.altitude = ubx_getAltitude();
+
+	data.time = ubx_getTime();
+
+	data.nav_type = ubx_getNavigationType();
+	data.satellite_count = ubx_getSatelliteCount();
+	data.fix_3d = ubx_has3DFix();
+
+	data.HorizontalAccuracy = ubx_getHorizontalAccuracy();
+	data.verticalAccuracy = ubx_getVerticalAccuracy();
+
+	data.horizontalSpeed = ubx_getHorizontalSpeed();
+	data.verticalSpeed = ubx_getVerticalSpeed();
+
+	data.COG = ubx_getCOG();
+	data.hDOP = ubx_getHDOP();
+	data.vDOP = ubx_getVDOP();
+	data.tDOP = ubx_getTDOP();
+
+	if (gpsReady) { gpsReady = 0; }
+	return data;
+}
+uint8_t ubx_hasNewData() { return gpsReady; }
+
+float ubx_getLat_nmea() { return gpsLat; }
+float ubx_getLat_deg() {
 	// gpsLat = GGMM.MM
 	int16_t GG__ = gpsLat/100;
 	float minutes = gpsLat - GG__*100;
@@ -251,35 +284,37 @@ float getLat() {
 	}
 	return GG__ + minutes/60;
 }
-
-float getLon() {
-	// gpsLat = GGGMM.MM
+float ubx_getLon_nmea() { return gpsLon;}
+float ubx_getLon_deg() {
+	// gpsLon = GGGMM.MM
 	int16_t GGG__ = gpsLon/100;
 	float minutes = gpsLon - GGG__*100;
-	//return minutes;
+
 	if (!(gpsVector & 0b01)) {
 		return -GGG__ - minutes/60;
 	}
 	return GGG__ + minutes/60;
 }
 
-float getTime() { return gpsTime; }
+float ubx_getTime() { return gpsTime; }
 
-float getAltitude() { return gpsH; }
+float ubx_getAltitude() { return gpsH; }
 
-float getNavigationType() { return gpsNavStat; }
-bool if3DFixAvailable() { if (gpsNavStat == 3 || gpsNavStat == 5) { return 1; } return 0; }
-
-float getSpeedHorizontal() { return speed; }
-float getSpeedVertical() { return speedV; }
-
-float getAccHorizontal() { return hAcc; }
-float getAccVertical() { return vAcc; }
-
-float getCOG() { return COG; }
-float getHDOP() { return HDOT; }
-float getVDOP() { return VDOT; }
-float getTDOP() { return TDOT; }
-
-float getStlCount() { return gpsStlCount; }
+ubx_nav_type_t ubx_getNavigationType() {
+	if (gpsNavStat < UBX_NAV_NO_FIX || UBX_NAV_TIME_ONLY_FIX < gpsNavStat) { gpsNavStat = (uint8_t) UBX_NAV_UNKNOWN; }
+	return (ubx_nav_type_t) gpsNavStat;
 }
+uint8_t ubx_has3DFix() { if (gpsNavStat == 3 || gpsNavStat == 5) { return 1; } return 0; }
+
+float ubx_getHorizontalSpeed() { return speed; }
+float ubx_getVerticalSpeed() { return speedV; }
+
+float ubx_getHorizontalAccuracy() { return hAcc; }
+float ubx_getVerticalAccuracy() { return vAcc; }
+
+float ubx_getCOG() { return COG; }
+float ubx_getHDOP() { return HDOT; }
+float ubx_getVDOP() { return VDOT; }
+float ubx_getTDOP() { return TDOT; }
+
+float ubx_getSatelliteCount() { return gpsStlCount; }
